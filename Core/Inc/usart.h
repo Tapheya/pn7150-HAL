@@ -27,7 +27,7 @@ extern "C" {
 
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
-
+#include "string.h"
 /* USER CODE BEGIN Includes */
 
 /* USER CODE END Includes */
@@ -44,7 +44,7 @@ void MX_UART5_Init(void);
 void MX_USART2_UART_Init(void);
 
 /* USER CODE BEGIN Prototypes */
-
+void DMSG(const char *msg);
 /* USER CODE END Prototypes */
 
 #ifdef __cplusplus

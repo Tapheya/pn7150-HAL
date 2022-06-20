@@ -42,6 +42,8 @@ void MX_I2C1_Init(void);
 
 /* USER CODE BEGIN Prototypes */
 void Send_Data(void);
+
+void Receive_Data(void);
 /* USER CODE END Prototypes */
 
 #ifdef __cplusplus

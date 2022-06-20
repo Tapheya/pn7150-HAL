@@ -24,6 +24,7 @@
 HAL_StatusTypeDef ret;
 static const uint8_t TMP102_ADDR = 0x09 << 1;
 uint8_t buf[6] = {'H', 'E', 'L', 'L', '0', '\0'};
+uint8_t rec[256];
 /* USER CODE END 0 */
 
 I2C_HandleTypeDef hi2c1;
@@ -139,6 +140,22 @@ void HAL_I2C_MspDeInit(I2C_HandleTypeDef* i2cHandle)
 
 void Send_Data(void) {
     ret = HAL_I2C_Master_Transmit(&hi2c1, TMP102_ADDR, buf, 6, HAL_MAX_DELAY);
+}
+
+void Receive_Data(void) {
+    ret = HAL_I2C_Master_Receive(&hi2c1, TMP102_ADDR, rec, 256, HAL_MAX_DELAY);
+    for (uint16_t i = 0; i < 256; i++) {
+        //ret = HAL_I2C_Master_Transmit(&hi2c1, TMP102_ADDR, rec, 10, HAL_MAX_DELAY);
+        if(rec[i] == 0xFF) {
+            ret = HAL_I2C_Master_Transmit(&hi2c1, TMP102_ADDR, rec, 10, HAL_MAX_DELAY);
+            break;
+        }
+    }
+    ret = HAL_I2C_Master_Transmit(&hi2c1, TMP102_ADDR, rec, 9, HAL_MAX_DELAY);
+//
+//    ret = HAL_I2C_Master_Receive(&hi2c1, TMP102_ADDR, rec, 256, HAL_MAX_DELAY);
+//    ret = HAL_I2C_Master_Transmit(&hi2c1, TMP102_ADDR, rec, 9, HAL_MAX_DELAY);
+
 }
 
 /* USER CODE END 1 */
