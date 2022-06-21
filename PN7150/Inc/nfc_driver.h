@@ -65,6 +65,57 @@
 #define PROT_ISO15693 0x6
 #define PROT_MIFARE 0x80
 
+// Command APDU
+#define C_APDU_CLA 0
+#define C_APDU_INS 1  // instruction
+#define C_APDU_P1 2   // parameter 1
+#define C_APDU_P2 3   // parameter 2
+#define C_APDU_LC 4   // length command
+#define C_APDU_DATA 5 // data
+
+#define C_APDU_P1_SELECT_BY_ID 0x00
+#define C_APDU_P1_SELECT_BY_NAME 0x04
+
+// Response APDU
+#define R_APDU_SW1_COMMAND_COMPLETE 0x90
+#define R_APDU_SW2_COMMAND_COMPLETE 0x00
+
+#define R_APDU_SW1_NDEF_TAG_NOT_FOUND 0x6a
+#define R_APDU_SW2_NDEF_TAG_NOT_FOUND 0x82
+
+#define R_APDU_SW1_FUNCTION_NOT_SUPPORTED 0x6A
+#define R_APDU_SW2_FUNCTION_NOT_SUPPORTED 0x81
+
+#define R_APDU_SW1_MEMORY_FAILURE 0x65
+#define R_APDU_SW2_MEMORY_FAILURE 0x81
+
+#define R_APDU_SW1_END_OF_FILE_BEFORE_REACHED_LE_BYTES 0x62
+#define R_APDU_SW2_END_OF_FILE_BEFORE_REACHED_LE_BYTES 0x82
+
+// ISO7816-4 commands
+#define ISO7816_SELECT_FILE 0xA4
+#define ISO7816_READ_BINARY 0xB0
+#define ISO7816_UPDATE_BINARY 0xD6
+
+#define NDEF_MAX_LENGTH 256
+
+typedef enum
+{
+    COMMAND_COMPLETE,
+    TAG_NOT_FOUND,
+    FUNCTION_NOT_SUPPORTED,
+    MEMORY_FAILURE,
+    END_OF_FILE_BEFORE_REACHED_LE_BYTES
+} responseCommand;
+
+typedef enum
+{
+    NONE,
+    CC,
+    NDEF
+} tag_file;
+
+
 /*
  * Flag definition used as Interface values
  */
@@ -235,30 +286,43 @@ private:
     uint32_t rxMessageLength; // length of the last message received. As these are not 0x00 terminated, we need to remember the length
     uint8_t gNfcController_generation = 0;
     uint8_t gNfcController_fw_version[3] = {0};
+    bool tagWriteable = true;
+    uint8_t sendlen;
+    int16_t status;
+    tag_file currentFile = NONE;
+    static void setResponse(responseCommand cmd, uint8_t *buf, uint8_t *sendlen, uint8_t sendlenOffset);
 
 public:
     NFCDriver(uint8_t I2Caddress);
     int GetFwVersion();
     uint8_t begin(void);
     HAL_StatusTypeDef writeData(uint8_t data[], uint32_t dataLength) const; // write data from DeviceHost to PN7150. Returns success (0) or Fail (> 0)
-    static uint32_t readData(uint8_t *data);                      // read data from PN7150, returns the amount of bytes read
+    static uint32_t readData(uint8_t data[]);                      // read data from PN7150, returns the amount of bytes read
     static bool hasMessage();
     uint8_t ConfigMode(uint8_t modeSE);
     uint8_t StartDiscovery(uint8_t modeSE);
     uint8_t connectNCI();
     uint8_t wakeupNCI();
-    bool CardModeSend(unsigned char *pData, unsigned char DataSize);
+    void init(uint8_t modeSE);
+    HAL_StatusTypeDef CardModeSend(unsigned char *pData, unsigned char DataSize);
     bool CardModeReceive(unsigned char *pData, unsigned char *pDataSize);
     bool WaitForDiscoveryNotification(RfIntf_t *pRfIntf, uint8_t tout = 0);
     void FillInterfaceInfo(RfIntf_t *pRfIntf, uint8_t *pBuf);
+    void EmulateTag(void (*callback)(uint8_t *buf, uint16_t length), uint32_t timeout = 0);
     bool ReaderTagCmd(unsigned char *pCommand, unsigned char CommandSize, unsigned char *pAnswer, unsigned char *pAnswerSize);
     bool StopDiscovery(void);
     void ProcessReaderMode(RfIntf_t RfIntf, RW_Operation_t Operation);
     void PresenceCheck(RfIntf_t RfIntf);
     bool ReaderReActivate(RfIntf_t *pRfIntf);
-    void PrintBuf(const uint8_t *data, const uint32_t numBytes);
     bool ReaderActivateNext(RfIntf_t *pRfIntf);
     bool ConfigureSettings(void);
+    bool NxpNci_FactoryTest_Prbs(NxpNci_TechType_t type, NxpNci_Bitrate_t bitrate);
+    bool NxpNci_FactoryTest_RfOn(void);
+    void ProcessP2pMode(RfIntf_t RfIntf);
+    void ReadNdef(RfIntf_t RfIntf);
+    void WriteNdef(RfIntf_t RfIntf);
+    void SetNDEFFile(const uint8_t *ndef, const int16_t ndefLength);
+    void PrintChar(const uint8_t * data, const long numBytes);
 
 };
 

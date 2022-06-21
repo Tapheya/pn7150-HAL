@@ -17,12 +17,14 @@
   */
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
-#include <iostream>
 #include "main.h"
+#include <stdio.h>
+#include <sys/unistd.h>
 #include "i2c.h"
 #include "usart.h"
 #include "gpio.h"
 #include "nfc_driver.h"
+#include "NdefMessage.h"
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
@@ -36,6 +38,8 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
+
+
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -59,7 +63,7 @@ void SystemClock_Config(void);
 /* USER CODE BEGIN 0 */
 NFCDriver nfc(0x28);
 /* USER CODE END 0 */
-
+extern void initialise_monitor_handles(void);
 /**
   * @brief  The application entry point.
   * @retval int
@@ -90,35 +94,24 @@ int main(void) {
     MX_I2C1_Init();
     MX_UART5_Init();
     MX_USART2_UART_Init();
+    setvbuf(stdout, NULL, _IONBF, 0);
     /* USER CODE BEGIN 2 */
 
-    if (nfc.connectNCI()) {
-        DMSG("Error while setting up the mode, check connections!\n");
-        while (1);
-    }
-//    if (nfc.ConfigureSettings()) {
-//        DMSG("The Configure Settings is failed!\n");
-//        while (1);
-//    }
-//
-//    if (nfc.ConfigMode(2)) { //Set up the configuration mode
-//        DMSG("The Configure Mode is failed!!\n");
-//        while (1);
-//    }
+    uint8_t mode = 2;
+    nfc.init(mode);
+
     /* USER CODE END 2 */
 
     /* Infinite loop */
     /* USER CODE BEGIN WHILE */
     while (1) {
         /* USER CODE END WHILE */
-
+        nfc.EmulateTag([](uint8_t* data, uint16_t len) {
+            nfc.PrintChar(data, len);
+            NdefMessage msg = NdefMessage(data, len);
+            msg.print();
+        }, 10000);
         /* USER CODE BEGIN 3 */
-//      HAL_GPIO_TogglePin(GPIOA, GPIO_PIN_5);
-//      HAL_Delay(3000);
-//      //Send_Data();
-//      Receive_Data();
-//      std::string data = "Thus I said unto you\n";
-//      DMSG(data.c_str());
     }
     /* USER CODE END 3 */
 }

@@ -2,8 +2,11 @@
 // Created by Chidiebere Onyedinma on 18/06/2022.
 //
 
-#include <cstring>
+
 #include "nfc_driver.h"
+#include "RW_NDEF.h"
+#include "P2P_NDEF.h"
+#include "NdefMessage.h"
 
 uint8_t gNextTag_Protocol = PROT_UNDETERMINED;
 
@@ -35,13 +38,27 @@ unsigned char DiscoveryTechnologiesP2P[] = { // P2P
         MODE_LISTEN | TECH_ACTIVE_NFCA,
         MODE_LISTEN | TECH_ACTIVE_NFCF};
 
+uint8_t ndef_file_write[NDEF_MAX_LENGTH];
+uint8_t ndef_file_read[NDEF_MAX_LENGTH];
 
-void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
-{
-    if(GPIO_Pin == GPIO_PIN_9) // If The INT Source Is EXTI Line9 (A9 Pin)
+uint8_t compatibility_container[] = {
+        0, 0x0F,
+        0x20,
+        0, 0x54,
+        0, 0xFF,
+        0x04,                                                        // T
+        0x06,                                                        // L
+        0xE1, 0x04,                                                  // File identifier
+        ((NDEF_MAX_LENGTH & 0xFF00) >> 8), (NDEF_MAX_LENGTH & 0xFF), // maximum NDEF file size
+        0x00,                                                        // read access 0x0 = granted
+        0x00                                                         // write access 0x0 = granted | 0xFF = deny
+};
+uint16_t cc_size = sizeof(compatibility_container);
+
+void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin) {
+    if (GPIO_Pin == GPIO_PIN_9) // If The INT Source Is EXTI Line9 (A9 Pin)
     {
-        DMSG("Data read\n");
-        //NFCDriver::readData(rxBuffer);
+        //printf("Data read\n");
     }
 }
 
@@ -71,16 +88,12 @@ HAL_StatusTypeDef NFCDriver::writeData(uint8_t *data, uint32_t dataLength) const
 }
 
 uint32_t NFCDriver::readData(uint8_t *data) {
-    if(hasMessage()) {
+    if (hasMessage()) {
         HAL_StatusTypeDef res = HAL_I2C_Master_Receive(&hi2c1, _I2Caddress, data, 258, HAL_MAX_DELAY);
         if (res != HAL_OK) {
             return 0;
         }
         uint32_t len = data[2] + 3;
-        memset(rxBuffer, '\0', 258);
-        for(uint32_t i = 0; i < len; i++) {
-            rxBuffer[i] = data[i];
-        }
         return len;
     }
     return 0;
@@ -98,24 +111,19 @@ bool NFCDriver::isTimeOut() const {
 bool NFCDriver::getMessage(uint16_t timeout) {
     setTimeOut(timeout);
     rxMessageLength = 0;
-    uint8_t buff[258];
-    if(isTimeOut()) {
-        DMSG("TIME OUT\n");
+    if (isTimeOut()) {
+        printf("TIME OUT\n");
     }
     while (!isTimeOut()) {
-        rxMessageLength = readData(buff);
+        rxMessageLength = readData(rxBuffer);
         if (rxMessageLength) {
-            std::ostringstream ss;
-            ss << "Length: " << rxMessageLength << "\n";
-            DMSG(ss.str().c_str());
+            //printf("Length %lu\n", rxMessageLength);
             break;
         } else if (timeout == 1337) {
             setTimeOut(timeout);
         }
     }
-    std::ostringstream tty;
-    tty << "Actual Len: " << buff[2] << "\n";
-    DMSG(tty.str().c_str());
+
     return rxMessageLength;
 }
 
@@ -152,28 +160,22 @@ uint8_t NFCDriver::connectNCI() {
 
 
     // Retrieve NXP-NCI NFC Controller generation
-    if (rxBuffer[17 + rxBuffer[8]] == 0x08)
+    if (rxBuffer[17 + rxBuffer[8]] == 0x08) {
         gNfcController_generation = 1;
-    else if (rxBuffer[17 + rxBuffer[8]] == 0x10)
+    } else if (rxBuffer[17 + rxBuffer[8]] == 0x10) {
         gNfcController_generation = 2;
+    }
 
     // Retrieve NXP-NCI NFC Controller FW version
     gNfcController_fw_version[0] = rxBuffer[17 + rxBuffer[8]]; // 0xROM_CODE_V
     gNfcController_fw_version[1] = rxBuffer[18 + rxBuffer[8]]; // 0xFW_MAJOR_NO
     gNfcController_fw_version[2] = rxBuffer[19 + rxBuffer[8]]; // 0xFW_MINOR_NO
 #ifdef __USART_H__
-    std::ostringstream ss1;
-    ss1 << "0xROM_CODE_V: " << std::hex << gNfcController_fw_version[0] << "\n";
-    DMSG(ss1.str().c_str());
-    std::ostringstream ss2;
-    ss2 << "FW_MAJOR_NO: " << std::hex << gNfcController_fw_version[1] << "\n";
-    DMSG(ss2.str().c_str());
-    std::ostringstream ss3;
-    ss3 << "0xFW_MINOR_NO: " << std::hex << gNfcController_fw_version[2] << "\n";
-    DMSG(ss3.str().c_str());
-    std::ostringstream ss4;
-    ss4 << "gNfcController_generation: " << std::hex << gNfcController_generation << "\n";
-    DMSG(ss4.str().c_str());
+    printf("0xROM_CODE_V: %x\n", gNfcController_fw_version[0]);
+    printf("FW_MAJOR_NO: %x\n", gNfcController_fw_version[1]);
+    printf("0xFW_MINOR_NO: %x\n", gNfcController_fw_version[2]);
+    printf("gNfcController_generation: %x\n", gNfcController_generation);
+
 #endif
     return SUCCESS;
 }
@@ -184,22 +186,19 @@ uint8_t NFCDriver::wakeupNCI() {
     uint16_t NbBytes = 0;
 
     // Reset RF settings restauration flag
-    if(writeData(NCICoreReset, 4) == HAL_OK) {
-        DMSG("Data SENT\n");
+    if (writeData(NCICoreReset, 4) == HAL_OK) {
+        printf("Data SENT\n");
     }
     getMessage(15);
     NbBytes = rxMessageLength;
     if ((NbBytes == 0) || (rxBuffer[0] != 0x40) || (rxBuffer[1] != 0x00)) {
-        DMSG("ERROR\n");
+        printf("ERROR\n");
         return ERROR;
     }
     getMessage();
     NbBytes = rxMessageLength;
 
     if (NbBytes != 0) {
-        std::ostringstream st;
-        st << "rxLength: " << NbBytes << "\n";
-        DMSG(st.str().c_str());
         // NCI_PRINT_BUF("NCI << ", Answer, NbBytes);
         //  Is CORE_GENERIC_ERROR_NTF ?
         if ((rxBuffer[0] == 0x60) && (rxBuffer[1] == 0x07)) {
@@ -209,7 +208,7 @@ uint8_t NFCDriver::wakeupNCI() {
             return ERROR;
         }
     }
-    DMSG("Wake up SUCCESS\n");
+    printf("Wake up SUCCESS\n");
     return SUCCESS;
 }
 
@@ -466,7 +465,7 @@ bool NFCDriver::ConfigureSettings(void) {
         getMessage();
         if ((rxBuffer[0] != 0x40) || (rxBuffer[1] != 0x02) || (rxBuffer[3] != 0x00) || (rxBuffer[4] != 0x00)) {
 #ifdef __USART_H__
-            DMSG("NxpNci_CORE_CONF\n");
+            printf("NxpNci_CORE_CONF\n");
 #endif
             return ERROR;
         }
@@ -480,7 +479,7 @@ bool NFCDriver::ConfigureSettings(void) {
         getMessage();
         if ((rxBuffer[0] != 0x4F) || (rxBuffer[1] != 0x00) || (rxBuffer[3] != 0x00)) {
 #ifdef __USART_H__
-            DMSG("NxpNci_CORE_STANDBY\n");
+            printf("NxpNci_CORE_STANDBY\n");
 #endif
             return ERROR;
         }
@@ -497,7 +496,7 @@ bool NFCDriver::ConfigureSettings(void) {
     getMessage();
     if ((rxBuffer[0] != 0x40) || (rxBuffer[1] != 0x03) || (rxBuffer[3] != 0x00)) {
 #ifdef __USART_H__
-        DMSG("read timestamp \n");
+        printf("read timestamp \n");
 #endif
         return ERROR;
     }
@@ -516,7 +515,7 @@ bool NFCDriver::ConfigureSettings(void) {
         getMessage();
         if ((rxBuffer[0] != 0x40) || (rxBuffer[1] != 0x02) || (rxBuffer[3] != 0x00) || (rxBuffer[4] != 0x00)) {
 #ifdef __USART_H__
-            DMSG("NxpNci_CORE_CONF_EXTN\n");
+            printf("NxpNci_CORE_CONF_EXTN\n");
 #endif
             return ERROR;
         }
@@ -532,7 +531,7 @@ bool NFCDriver::ConfigureSettings(void) {
         // NxpNci_HostTransceive(NxpNci_CLK_CONF, sizeof(NxpNci_CLK_CONF), Answer, sizeof(Answer), &AnswerSize);
         if ((rxBuffer[0] != 0x40) || (rxBuffer[1] != 0x02) || (rxBuffer[3] != 0x00) || (rxBuffer[4] != 0x00)) {
 #ifdef __USART_H__
-            DMSG("NxpNci_CLK_CONF\n");
+            printf("NxpNci_CLK_CONF\n");
 #endif
             return ERROR;
         }
@@ -546,7 +545,7 @@ bool NFCDriver::ConfigureSettings(void) {
         getMessage();
         if ((rxBuffer[0] != 0x40) || (rxBuffer[1] != 0x02) || (rxBuffer[3] != 0x00) || (rxBuffer[4] != 0x00)) {
 #ifdef __USART_H__
-            DMSG("NxpNci_CONF_size\n");
+            printf("NxpNci_CONF_size\n");
 #endif
             return ERROR;
         }
@@ -560,7 +559,7 @@ bool NFCDriver::ConfigureSettings(void) {
         getMessage();
         if ((rxBuffer[0] != 0x40) || (rxBuffer[1] != 0x02) || (rxBuffer[3] != 0x00) || (rxBuffer[4] != 0x00)) {
 #ifdef __USART_H__
-            DMSG("NxpNci_CONF_size\n");
+            printf("NxpNci_CONF_size\n");
 #endif
             return ERROR;
         }
@@ -574,7 +573,7 @@ bool NFCDriver::ConfigureSettings(void) {
     getMessage();
     if ((rxBuffer[0] != 0x40) || (rxBuffer[1] != 0x02) || (rxBuffer[3] != 0x00) || (rxBuffer[4] != 0x00)) {
 #ifdef __USART_H__
-        DMSG("NFC Controller memory\n");
+        printf("NFC Controller memory\n");
 #endif
         return ERROR;
     }
@@ -587,7 +586,7 @@ bool NFCDriver::ConfigureSettings(void) {
         getMessage();
         if ((rxBuffer[0] != 0x40) || (rxBuffer[1] != 0x00) || (rxBuffer[3] != 0x00)) {
 #ifdef __USART_H__
-            DMSG("insure new settings apply\n");
+            printf("insure new settings apply\n");
 #endif
             return ERROR;
         }
@@ -596,7 +595,7 @@ bool NFCDriver::ConfigureSettings(void) {
         getMessage();
         if ((rxBuffer[0] != 0x40) || (rxBuffer[1] != 0x01) || (rxBuffer[3] != 0x00)) {
 #ifdef __USART_H__
-            DMSG("insure new settings apply 2\n");
+            printf("insure new settings apply 2\n");
 #endif
             return ERROR;
         }
@@ -605,30 +604,900 @@ bool NFCDriver::ConfigureSettings(void) {
 }
 
 uint8_t NFCDriver::StartDiscovery(uint8_t modeSE) {
-    unsigned char TechTabSize = (modeSE == 1 ? sizeof(DiscoveryTechnologiesRW) : modeSE == 2 ? sizeof(DiscoveryTechnologiesCE)
-                                                                                             : sizeof(DiscoveryTechnologiesP2P));
+    unsigned char TechTabSize = (modeSE == 1 ? sizeof(DiscoveryTechnologiesRW) : modeSE == 2
+                                                                                 ? sizeof(DiscoveryTechnologiesCE)
+                                                                                 : sizeof(DiscoveryTechnologiesP2P));
 
     NCIStartDiscovery_length = 0;
     NCIStartDiscovery[0] = 0x21;
     NCIStartDiscovery[1] = 0x03;
     NCIStartDiscovery[2] = (TechTabSize * 2) + 1;
     NCIStartDiscovery[3] = TechTabSize;
-    for (uint8_t i = 0; i < TechTabSize; i++)
-    {
-        NCIStartDiscovery[(i * 2) + 4] = (modeSE == 1 ? DiscoveryTechnologiesRW[i] : modeSE == 2 ? DiscoveryTechnologiesCE[i]
-                                                                                                 : DiscoveryTechnologiesP2P[i]);
+    for (uint8_t i = 0; i < TechTabSize; i++) {
+        NCIStartDiscovery[(i * 2) + 4] = (modeSE == 1 ? DiscoveryTechnologiesRW[i] : modeSE == 2
+                                                                                     ? DiscoveryTechnologiesCE[i]
+                                                                                     : DiscoveryTechnologiesP2P[i]);
 
         NCIStartDiscovery[(i * 2) + 5] = 0x01;
     }
 
     NCIStartDiscovery_length = (TechTabSize * 2) + 4;
-    (void)writeData(NCIStartDiscovery, NCIStartDiscovery_length);
+    (void) writeData(NCIStartDiscovery, NCIStartDiscovery_length);
     getMessage();
 
     if ((rxBuffer[0] != 0x41) || (rxBuffer[1] != 0x03) || (rxBuffer[3] != 0x00))
         return ERROR;
     else
         return SUCCESS;
+}
+
+HAL_StatusTypeDef NFCDriver::CardModeSend(unsigned char *pData, unsigned char DataSize) {
+
+    uint8_t Cmd[MAX_NCI_FRAME_SIZE];
+
+    /* Compute and send DATA_PACKET */
+    Cmd[0] = 0x00;
+    Cmd[1] = 0x00;
+    Cmd[2] = DataSize;
+    memcpy(&Cmd[3], pData, DataSize);
+
+    return writeData(Cmd, DataSize + 3);
+}
+
+bool NFCDriver::CardModeReceive(unsigned char *pData, unsigned char *pDataSize) {
+    bool status = NFC_ERROR;
+    uint8_t Ans[MAX_NCI_FRAME_SIZE];
+
+    //writeData(Ans, sizeof(Ans));
+    getMessage(2000);
+
+    /* Is data packet ? */
+    if ((rxBuffer[0] == 0x00) && (rxBuffer[1] == 0x00)) {
+        *pDataSize = rxBuffer[2];
+        memcpy(pData, &rxBuffer[3], *pDataSize);
+        status = NFC_SUCCESS;
+    } else {
+        status = NFC_ERROR;
+    }
+    return status;
+}
+
+bool NFCDriver::StopDiscovery(void) {
+    uint8_t NCIStopDiscovery[] = {0x21, 0x06, 0x01, 0x00};
+
+    (void) writeData(NCIStopDiscovery, sizeof(NCIStopDiscovery));
+    getMessage();
+    getMessage(1000);
+
+    return SUCCESS;
+}
+
+bool NFCDriver::WaitForDiscoveryNotification(RfIntf_t *pRfIntf, uint8_t tout) {
+    uint8_t NCIRfDiscoverSelect[] = {0x21, 0x04, 0x03, 0x01, PROT_ISODEP, INTF_ISODEP};
+
+    // P2P Support
+    uint8_t NCIStopDiscovery[] = {0x21, 0x06, 0x01, 0x00};
+    uint8_t NCIRestartDiscovery[] = {0x21, 0x06, 0x01, 0x03};
+    uint8_t saved_NTF[7];
+
+    gNextTag_Protocol = PROT_UNDETERMINED;
+    wait:
+    do {
+        getMessage(
+                tout > 0 ? tout : 1337); // Infinite loop, waiting for response
+    } while ((rxBuffer[0] != 0x61) || ((rxBuffer[1] != 0x05) && (rxBuffer[1] != 0x03)));
+
+    gNextTag_Protocol = PROT_UNDETERMINED;
+
+    /* Is RF_INTF_ACTIVATED_NTF ? */
+    if (rxBuffer[1] == 0x05) {
+        pRfIntf->Interface = rxBuffer[4];
+        pRfIntf->Protocol = rxBuffer[5];
+        pRfIntf->ModeTech = rxBuffer[6];
+        pRfIntf->MoreTags = false;
+        FillInterfaceInfo(pRfIntf, &rxBuffer[10]);
+
+        // P2P
+        /* Verifying if not a P2P device also presenting T4T emulation */
+        if ((pRfIntf->Interface == INTF_ISODEP) && (pRfIntf->Protocol == PROT_ISODEP) &&
+            ((pRfIntf->ModeTech & MODE_LISTEN) != MODE_LISTEN)) {
+            memcpy(saved_NTF, rxBuffer, sizeof(saved_NTF));
+            while (1) {
+                /* Restart the discovery loop */
+                (void) writeData(NCIRestartDiscovery, sizeof(NCIRestartDiscovery));
+                getMessage();
+                getMessage(100);
+                /* Wait for discovery */
+                do {
+                    getMessage(1000); // Infinite loop, waiting for response
+                } while ((rxMessageLength == 4) && (rxBuffer[0] == 0x60) && (rxBuffer[1] == 0x07));
+
+                if ((rxMessageLength != 0) && (rxBuffer[0] == 0x61) && (rxBuffer[1] == 0x05)) {
+                    /* Is same device detected ? */
+                    if (memcmp(saved_NTF, rxBuffer, sizeof(saved_NTF)) == 0)
+                        break;
+                    /* Is P2P detected ? */
+                    if (rxBuffer[5] == PROT_NFCDEP) {
+                        pRfIntf->Interface = rxBuffer[4];
+                        pRfIntf->Protocol = rxBuffer[5];
+                        pRfIntf->ModeTech = rxBuffer[6];
+                        pRfIntf->MoreTags = false;
+                        FillInterfaceInfo(pRfIntf, &rxBuffer[10]);
+                        break;
+                    }
+                } else {
+                    if (rxMessageLength != 0) {
+                        /* Flush any other notification  */
+                        while (rxMessageLength != 0)
+                            getMessage(100);
+
+                        /* Restart the discovery loop */
+                        (void) writeData(NCIRestartDiscovery, sizeof(NCIRestartDiscovery));
+                        getMessage();
+                        getMessage(100);
+                    }
+                    goto wait;
+                }
+            }
+        }
+    } else { /* RF_DISCOVER_NTF */
+        pRfIntf->Interface = INTF_UNDETERMINED;
+        pRfIntf->Protocol = rxBuffer[4];
+        pRfIntf->ModeTech = rxBuffer[5];
+        pRfIntf->MoreTags = true;
+
+        /* Get next NTF for further activation */
+        do {
+            if (!getMessage(100))
+                return ERROR;
+        } while ((rxBuffer[0] != 0x61) || (rxBuffer[1] != 0x03));
+        gNextTag_Protocol = rxBuffer[4];
+
+        /* Remaining NTF ? */
+
+        while (rxBuffer[rxMessageLength - 1] == 0x02)
+            getMessage(100);
+
+        /* In case of multiple cards, select the first one */
+        NCIRfDiscoverSelect[4] = pRfIntf->Protocol;
+        if (pRfIntf->Protocol == PROT_ISODEP)
+            NCIRfDiscoverSelect[5] = INTF_ISODEP;
+        else if (pRfIntf->Protocol == PROT_NFCDEP)
+            NCIRfDiscoverSelect[5] = INTF_NFCDEP;
+        else if (pRfIntf->Protocol == PROT_MIFARE)
+            NCIRfDiscoverSelect[5] = INTF_TAGCMD;
+        else
+            NCIRfDiscoverSelect[5] = INTF_FRAME;
+
+        (void) writeData(NCIRfDiscoverSelect, sizeof(NCIRfDiscoverSelect));
+        getMessage(100);
+
+        if ((rxBuffer[0] == 0x41) || (rxBuffer[1] == 0x04) || (rxBuffer[3] == 0x00)) {
+            (void) writeData(rxBuffer, rxMessageLength);
+            getMessage(100);
+
+            if ((rxBuffer[0] == 0x61) || (rxBuffer[1] == 0x05)) {
+                pRfIntf->Interface = rxBuffer[4];
+                pRfIntf->Protocol = rxBuffer[5];
+                pRfIntf->ModeTech = rxBuffer[6];
+                FillInterfaceInfo(pRfIntf, &rxBuffer[10]);
+            }
+
+                /* In case of P2P target detected but lost, inform application to restart discovery */
+            else if (pRfIntf->Protocol == PROT_NFCDEP) {
+                /* Restart the discovery loop */
+                (void) writeData(NCIStopDiscovery, sizeof(NCIStopDiscovery));
+                getMessage();
+                getMessage(100);
+
+                (void) writeData(NCIStartDiscovery, NCIStartDiscovery_length);
+                getMessage();
+
+                goto wait;
+            }
+        }
+    }
+
+    /* In case of unknown target align protocol information */
+    if (pRfIntf->Interface == INTF_UNDETERMINED)
+        pRfIntf->Protocol = PROT_UNDETERMINED;
+
+    return SUCCESS;
+}
+
+void NFCDriver::FillInterfaceInfo(RfIntf_t *pRfIntf, uint8_t *pBuf) {
+    uint8_t i, temp;
+
+    switch (pRfIntf->ModeTech) {
+        case (MODE_POLL | TECH_PASSIVE_NFCA):
+            memcpy(pRfIntf->Info.NFC_APP.SensRes, &pBuf[0], 2);
+            temp = 2;
+            pRfIntf->Info.NFC_APP.NfcIdLen = pBuf[temp];
+            temp++;
+            memcpy(pRfIntf->Info.NFC_APP.NfcId, &pBuf[3], pRfIntf->Info.NFC_APP.NfcIdLen);
+            temp += pBuf[2];
+            pRfIntf->Info.NFC_APP.SelResLen = pBuf[temp];
+            temp++;
+
+            if (pRfIntf->Info.NFC_APP.SelResLen == 1)
+                pRfIntf->Info.NFC_APP.SelRes[0] = pBuf[temp];
+
+            temp += 4;
+            if (pBuf[temp] != 0) {
+                temp++;
+                pRfIntf->Info.NFC_APP.RatsLen = pBuf[temp];
+                memcpy(pRfIntf->Info.NFC_APP.Rats, &pBuf[temp + 1], pBuf[temp]);
+            } else {
+                pRfIntf->Info.NFC_APP.RatsLen = 0;
+            }
+            break;
+
+        case (MODE_POLL | TECH_PASSIVE_NFCB):
+            pRfIntf->Info.NFC_BPP.SensResLen = pBuf[0];
+            memcpy(pRfIntf->Info.NFC_BPP.SensRes, &pBuf[1], pRfIntf->Info.NFC_BPP.SensResLen);
+            temp = pBuf[0] + 4;
+            if (pBuf[temp] != 0) {
+                temp++;
+                pRfIntf->Info.NFC_BPP.AttribResLen = pBuf[temp];
+                memcpy(pRfIntf->Info.NFC_BPP.AttribRes, &pBuf[temp + 1], pBuf[temp]);
+            } else {
+                pRfIntf->Info.NFC_BPP.AttribResLen = 0;
+            }
+            break;
+
+        case (MODE_POLL | TECH_PASSIVE_NFCF):
+            pRfIntf->Info.NFC_FPP.BitRate = pBuf[0];
+            pRfIntf->Info.NFC_FPP.SensResLen = pBuf[1];
+            memcpy(pRfIntf->Info.NFC_FPP.SensRes, &pBuf[2], pRfIntf->Info.NFC_FPP.SensResLen);
+            break;
+
+        case (MODE_POLL | TECH_PASSIVE_15693):
+            pRfIntf->Info.NFC_VPP.AFI = pBuf[0];
+            pRfIntf->Info.NFC_VPP.DSFID = pBuf[1];
+
+            for (i = 0; i < 8; i++)
+                pRfIntf->Info.NFC_VPP.ID[7 - i] = pBuf[2 + i];
+
+            break;
+
+        default:
+            break;
+    }
+}
+
+void NFCDriver::EmulateTag(void (*callback)(uint8_t *, uint16_t),
+        uint32_t timeout) {
+    unsigned char tag_cmd[NDEF_MAX_LENGTH], CmdSize;
+    bool tagWrittenByInitiator = false;
+
+
+    uint8_t ndefBuf[120];
+    NdefMessage message = NdefMessage();
+    int messageSize;
+    message.addUriRecord("http://www.tapheya.com");
+    messageSize = message.getEncodedSize();
+
+
+    message.encode(ndefBuf);
+
+    // comment out this command for no ndef message
+    SetNDEFFile(ndefBuf, messageSize);
+    StartDiscovery(2);
+    unsigned long start = HAL_GetTick();
+    printf("Waiting for a Card Reader ...\n");
+
+    while (!((HAL_GetTick() - start) >= timeout) || timeout == 0) {
+        if (!tagWrittenByInitiator) {
+            if (CardModeReceive(tag_cmd, &CmdSize) == 0) { //Data in buffer?
+                if ((CmdSize >= 2) && (tag_cmd[0] == 0x00)) { //Expect at least two bytes
+                    printf("CMD Filled...\n");
+                    uint8_t p1 = tag_cmd[C_APDU_P1];
+                    uint8_t p2 = tag_cmd[C_APDU_P2];
+                    uint8_t lc = tag_cmd[C_APDU_LC];
+                    uint16_t p1p2_length = ((int16_t) p1 << 8) + p2;
+                    switch (tag_cmd[C_APDU_INS]) {
+                        case ISO7816_SELECT_FILE:
+                            printf("File Select...\n");
+                            switch (p1) {
+                                case C_APDU_P1_SELECT_BY_ID:
+                                    printf("Select By ID...\n");
+                                    if (p2 != 0x0c) {
+                                        printf("C_APDU_P2 != 0x0c\n");
+                                        setResponse(COMMAND_COMPLETE, tag_cmd, &sendlen, 0);
+                                    } else if (lc == 2 && tag_cmd[C_APDU_DATA] == 0xE1 &&
+                                               (tag_cmd[C_APDU_DATA + 1] == 0x03 || tag_cmd[C_APDU_DATA + 1] == 0x04)) {
+                                        setResponse(COMMAND_COMPLETE, tag_cmd, &sendlen, 0);
+                                        if (tag_cmd[C_APDU_DATA + 1] == 0x03) {
+                                            currentFile = CC;
+                                            printf("File is CC..\n");
+                                        } else if (tag_cmd[C_APDU_DATA + 1] == 0x04) {
+                                            currentFile = NDEF;
+                                            printf("File is NDEF..\n");
+                                        }
+                                    } else {
+                                        printf("Tag not found..\n");
+                                        setResponse(TAG_NOT_FOUND, tag_cmd, &sendlen, 0);
+                                    }
+                                    break;
+                                case C_APDU_P1_SELECT_BY_NAME:
+                                    printf("Select By Name...\n");
+                                    const uint8_t ndef_tag_application_name_v2[] = {0, 0x7, 0xD2, 0x76, 0x00, 0x00,
+                                                                                    0x85,
+                                                                                    0x01, 0x01};
+                                    if (0 == memcmp(ndef_tag_application_name_v2, tag_cmd + C_APDU_P2,
+                                            sizeof(ndef_tag_application_name_v2))) {
+                                        printf("Selected by Name...\n");
+                                        setResponse(COMMAND_COMPLETE, tag_cmd, &sendlen, 0);
+                                    } else {
+                                        printf("function not supported\n");
+                                        setResponse(FUNCTION_NOT_SUPPORTED, tag_cmd, &sendlen, 0);
+                                    }
+                                    break;
+                            }
+                            break;
+                        case ISO7816_READ_BINARY:
+                            printf("Read Binary...\n");
+                            switch (currentFile) {
+                                case NONE:
+                                    setResponse(TAG_NOT_FOUND, tag_cmd, &sendlen, 0);
+                                    break;
+                                case CC:
+                                    if (p1p2_length > NDEF_MAX_LENGTH) {
+                                        setResponse(END_OF_FILE_BEFORE_REACHED_LE_BYTES, tag_cmd, &sendlen, 0);
+                                    } else {
+                                        memcpy(tag_cmd, compatibility_container + p1p2_length, lc);
+                                        setResponse(COMMAND_COMPLETE, tag_cmd + lc, &sendlen, lc);
+                                    }
+                                    break;
+                                case NDEF:
+                                    if (p1p2_length > NDEF_MAX_LENGTH) {
+                                        setResponse(END_OF_FILE_BEFORE_REACHED_LE_BYTES, tag_cmd, &sendlen, 0);
+                                    } else {
+                                        memcpy(tag_cmd, ndef_file_read + p1p2_length, lc);
+                                        setResponse(COMMAND_COMPLETE, tag_cmd + lc, &sendlen, lc);
+                                    }
+                                    break;
+                            }
+                            break;
+                        case ISO7816_UPDATE_BINARY:
+                            printf("Update Binary...\n");
+                            if (!tagWriteable) {
+                                setResponse(FUNCTION_NOT_SUPPORTED, tag_cmd, &sendlen, 0);
+                            } else {
+                                if (p1p2_length > NDEF_MAX_LENGTH) {
+                                    printf("Memory failure\n");
+                                    setResponse(MEMORY_FAILURE, tag_cmd, &sendlen, 0);
+                                } else {
+                                    memcpy(ndef_file_write + p1p2_length, tag_cmd + C_APDU_DATA, lc);
+                                    setResponse(COMMAND_COMPLETE, tag_cmd, &sendlen, 0);
+                                    tagWrittenByInitiator = true;
+                                    printf("Tag Written...\n");
+                                    uint16_t ndef_length = (ndef_file_write[0] << 8) + ndef_file_write[1];
+                                    if ((ndef_length > 0) && (callback != nullptr)) {
+                                        callback(ndef_file_write + 2, ndef_length);
+                                    }
+                                }
+                            }
+                            break;
+                        default:
+                            printf("Command not supported! %x\n", tag_cmd[C_APDU_INS]);
+                            setResponse(FUNCTION_NOT_SUPPORTED, tag_cmd, &sendlen, 0);
+                    }
+                    if (CardModeSend(tag_cmd, sendlen) == HAL_OK) {
+                        printf("Response Sent\n");
+                    }
+                }
+            }
+        } else {
+            break;
+        }
+    }
+
+}
+
+void NFCDriver::init(uint8_t modeSE) {
+    if (connectNCI()) {
+        printf("Error while setting up the mode, check connections!\n");
+        while (1);
+    }
+    if (ConfigureSettings()) {
+        printf("The Configure Settings is failed!\n");
+        while (1);
+    }
+
+    if (ConfigMode(modeSE)) { //Set up the configuration mode
+        printf("The Configure Mode is failed!!\n");
+        while (1);
+    }
+    printf("Initialization Successful\n");
+}
+
+void NFCDriver::setResponse(responseCommand cmd, uint8_t *buf, uint8_t *send_length, uint8_t sendlenOffset) {
+    switch (cmd) {
+        case COMMAND_COMPLETE:
+            buf[0] = R_APDU_SW1_COMMAND_COMPLETE;
+            buf[1] = R_APDU_SW2_COMMAND_COMPLETE;
+            *send_length = 2 + sendlenOffset;
+            break;
+        case TAG_NOT_FOUND:
+            buf[0] = R_APDU_SW1_NDEF_TAG_NOT_FOUND;
+            buf[1] = R_APDU_SW2_NDEF_TAG_NOT_FOUND;
+            *send_length = 2;
+            break;
+        case FUNCTION_NOT_SUPPORTED:
+            buf[0] = R_APDU_SW1_FUNCTION_NOT_SUPPORTED;
+            buf[1] = R_APDU_SW2_FUNCTION_NOT_SUPPORTED;
+            *send_length = 2;
+            break;
+        case MEMORY_FAILURE:
+            buf[0] = R_APDU_SW1_MEMORY_FAILURE;
+            buf[1] = R_APDU_SW2_MEMORY_FAILURE;
+            *send_length = 2;
+            break;
+        case END_OF_FILE_BEFORE_REACHED_LE_BYTES:
+            buf[0] = R_APDU_SW1_END_OF_FILE_BEFORE_REACHED_LE_BYTES;
+            buf[1] = R_APDU_SW2_END_OF_FILE_BEFORE_REACHED_LE_BYTES;
+            *send_length = 2;
+            break;
+    }
+}
+
+int NFCDriver::GetFwVersion() {
+    return ((gNfcController_fw_version[0] & 0xFF) << 16) | ((gNfcController_fw_version[1] & 0xFF) << 8) | (gNfcController_fw_version[2] & 0xFF);
+}
+
+bool NFCDriver::ReaderTagCmd(unsigned char *pCommand, unsigned char CommandSize, unsigned char *pAnswer,
+        unsigned char *pAnswerSize) {
+    bool status = ERROR;
+    uint8_t Cmd[MAX_NCI_FRAME_SIZE];
+
+    /* Compute and send DATA_PACKET */
+    Cmd[0] = 0x00;
+    Cmd[1] = 0x00;
+    Cmd[2] = CommandSize;
+    memcpy(&Cmd[3], pCommand, CommandSize);
+
+    (void)writeData(Cmd, CommandSize + 3);
+    getMessage();
+    getMessage(1000);
+    /* Wait for Answer 1S */
+
+    if ((rxBuffer[0] == 0x0) && (rxBuffer[1] == 0x0))
+        status = SUCCESS;
+
+    *pAnswerSize = rxBuffer[2];
+    memcpy(pAnswer, &rxBuffer[3], *pAnswerSize);
+
+    return status;
+}
+
+void NFCDriver::ProcessReaderMode(RfIntf_t RfIntf, RW_Operation_t Operation) {
+    switch (Operation)
+    {
+        case READ_NDEF:
+            ReadNdef(RfIntf);
+            break;
+        case WRITE_NDEF:
+            WriteNdef(RfIntf);
+            break;
+        case PRESENCE_CHECK:
+            PresenceCheck(RfIntf);
+            break;
+        default:
+            break;
+    }
+}
+
+void NFCDriver::PresenceCheck(RfIntf_t RfIntf) {
+
+    bool status;
+    uint8_t i;
+
+    uint8_t NCIPresCheckT1T[] = {0x00, 0x00, 0x07, 0x78, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+    uint8_t NCIPresCheckT2T[] = {0x00, 0x00, 0x02, 0x30, 0x00};
+    uint8_t NCIPresCheckT3T[] = {0x21, 0x08, 0x04, 0xFF, 0xFF, 0x00, 0x01};
+    uint8_t NCIPresCheckIsoDep[] = {0x2F, 0x11, 0x00};
+    uint8_t NCIPresCheckIso15693[] = {0x00, 0x00, 0x0B, 0x26, 0x01, 0x40, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+    uint8_t NCIDeactivate[] = {0x21, 0x06, 0x01, 0x01};
+    uint8_t NCISelectMIFARE[] = {0x21, 0x04, 0x03, 0x01, 0x80, 0x80};
+
+    switch (RfIntf.Protocol)
+    {
+        case PROT_T1T:
+            do
+            {
+                HAL_Delay(500);
+                writeData(NCIPresCheckT1T, sizeof(NCIPresCheckT1T));
+                getMessage();
+                getMessage(100);
+            } while ((rxBuffer[0] == 0x00) && (rxBuffer[1] == 0x00));
+            break;
+
+        case PROT_T2T:
+            do
+            {
+                HAL_Delay(500);
+                writeData(NCIPresCheckT2T, sizeof(NCIPresCheckT2T));
+                getMessage();
+                getMessage(100);
+            } while ((rxBuffer[0] == 0x00) && (rxBuffer[1] == 0x00) && (rxBuffer[2] == 0x11));
+            break;
+
+        case PROT_T3T:
+            do
+            {
+                HAL_Delay(500);
+                writeData(NCIPresCheckT3T, sizeof(NCIPresCheckT3T));
+                getMessage();
+                getMessage(100);
+            } while ((rxBuffer[0] == 0x61) && (rxBuffer[1] == 0x08) && ((rxBuffer[3] == 0x00) || (rxBuffer[4] > 0x00)));
+            break;
+
+        case PROT_ISODEP:
+            do
+            {
+                HAL_Delay(500);
+                writeData(NCIPresCheckIsoDep, sizeof(NCIPresCheckIsoDep));
+                getMessage();
+                getMessage(100);
+            } while ((rxBuffer[0] == 0x6F) && (rxBuffer[1] == 0x11) && (rxBuffer[2] == 0x01) && (rxBuffer[3] == 0x01));
+            break;
+
+        case PROT_ISO15693:
+            do
+            {
+                HAL_Delay(500);
+                for (i = 0; i < 8; i++)
+                    NCIPresCheckIso15693[i + 6] = RfIntf.Info.NFC_VPP.ID[7 - i];
+                writeData(NCIPresCheckIso15693, sizeof(NCIPresCheckIso15693));
+                getMessage();
+                getMessage(100);
+                status = ERROR;
+                if (rxMessageLength)
+                    status = SUCCESS;
+            } while ((status == SUCCESS) && (rxBuffer[0] == 0x00) && (rxBuffer[1] == 0x00) && (rxBuffer[rxMessageLength - 1] == 0x00));
+            break;
+
+        case PROT_MIFARE:
+            do
+            {
+                HAL_Delay(500);
+                /* Deactivate target */
+                writeData(NCIDeactivate, sizeof(NCIDeactivate));
+                getMessage();
+                getMessage(100);
+
+                /* Reactivate target */
+                writeData(NCISelectMIFARE, sizeof(NCISelectMIFARE));
+                getMessage();
+                getMessage(100);
+            } while ((rxBuffer[0] == 0x61) && (rxBuffer[1] == 0x05));
+            break;
+
+        default:
+            /* Nothing to do */
+            break;
+    }
+}
+
+void NFCDriver::ReadNdef(RfIntf_t RfIntf) {
+    uint8_t Cmd[MAX_NCI_FRAME_SIZE];
+    uint16_t CmdSize = 0;
+
+    RW_NDEF_Reset(RfIntf.Protocol);
+
+    while (1)
+    {
+        RW_NDEF_Read_Next(&rxBuffer[3], rxBuffer[2], &Cmd[3], (unsigned short *)&CmdSize);
+        if (CmdSize == 0)
+        {
+            /// End of the Read operation
+            break;
+        }
+        else
+        {
+            // Compute and send DATA_PACKET
+            Cmd[0] = 0x00;
+            Cmd[1] = (CmdSize & 0xFF00) >> 8;
+            Cmd[2] = CmdSize & 0x00FF;
+
+            (void)writeData(Cmd, CmdSize + 3);
+            getMessage();
+            getMessage(1000);
+
+            // Manage chaining in case of T4T
+            if ((RfIntf.Interface = INTF_ISODEP) && rxBuffer[0] == 0x10)
+            {
+                uint8_t tmp[MAX_NCI_FRAME_SIZE];
+                uint8_t tmpSize = 0;
+                while (rxBuffer[0] == 0x10)
+                {
+                    memcpy(&tmp[tmpSize], &rxBuffer[3], rxBuffer[2]);
+                    tmpSize += rxBuffer[2];
+                    getMessage(100);
+                }
+                memcpy(&tmp[tmpSize], &rxBuffer[3], rxBuffer[2]);
+                tmpSize += rxBuffer[2];
+                //* Compute all chained frame into one unique answer
+                memcpy(&rxBuffer[3], tmp, tmpSize);
+                rxBuffer[2] = tmpSize;
+            }
+        }
+    }
+}
+
+void NFCDriver::WriteNdef(RfIntf_t RfIntf) {
+
+    uint8_t Cmd[MAX_NCI_FRAME_SIZE];
+    uint16_t CmdSize = 0;
+
+    RW_NDEF_Reset(RfIntf.Protocol);
+
+    while (1)
+    {
+        RW_NDEF_Write_Next(&rxBuffer[3], rxBuffer[2], &Cmd[3], (unsigned short *)&CmdSize);
+        if (CmdSize == 0)
+        {
+            // End of the Write operation
+            break;
+        }
+        else
+        {
+            // Compute and send DATA_PACKET
+            Cmd[0] = 0x00;
+            Cmd[1] = (CmdSize & 0xFF00) >> 8;
+            Cmd[2] = CmdSize & 0x00FF;
+
+            (void)writeData(Cmd, CmdSize + 3);
+            getMessage();
+            getMessage(2000);
+        }
+    }
+}
+
+bool NFCDriver::ReaderReActivate(RfIntf_t *pRfIntf) {
+    uint8_t NCIDeactivate[] = {0x21, 0x06, 0x01, 0x01};
+    uint8_t NCIActivate[] = {0x21, 0x04, 0x03, 0x01, 0x00, 0x00};
+
+    /* First de-activate the target */
+    (void)writeData(NCIDeactivate, sizeof(NCIDeactivate));
+    getMessage();
+    getMessage(100);
+
+    /* Then re-activate the target */
+    NCIActivate[4] = pRfIntf->Protocol;
+    NCIActivate[5] = pRfIntf->Interface;
+
+    (void)writeData(NCIDeactivate, sizeof(NCIDeactivate));
+    getMessage();
+    getMessage(100);
+
+    if ((rxBuffer[0] != 0x61) || (rxBuffer[1] != 0x05))
+        return ERROR;
+    return SUCCESS;
+}
+
+bool NFCDriver::ReaderActivateNext(RfIntf_t *pRfIntf) {
+    uint8_t NCIStopDiscovery[] = {0x21, 0x06, 0x01, 0x01};
+    uint8_t NCIRfDiscoverSelect[] = {0x21, 0x04, 0x03, 0x02, PROT_ISODEP, INTF_ISODEP};
+
+    bool status = ERROR;
+
+    pRfIntf->MoreTags = false;
+
+    if (gNextTag_Protocol == PROT_UNDETERMINED)
+    {
+        pRfIntf->Interface = INTF_UNDETERMINED;
+        pRfIntf->Protocol = PROT_UNDETERMINED;
+        return ERROR;
+    }
+
+    /* First disconnect current tag */
+    (void)writeData(NCIStopDiscovery, sizeof(NCIStopDiscovery));
+    getMessage();
+
+    if ((rxBuffer[0] != 0x41) && (rxBuffer[1] != 0x06) && (rxBuffer[3] != 0x00))
+        return ERROR;
+    getMessage(100);
+
+    if ((rxBuffer[0] != 0x61) && (rxBuffer[1] != 0x06))
+        return ERROR;
+
+    NCIRfDiscoverSelect[4] = gNextTag_Protocol;
+    if (gNextTag_Protocol == PROT_ISODEP)
+        NCIRfDiscoverSelect[5] = INTF_ISODEP;
+    else if (gNextTag_Protocol == PROT_ISODEP)
+        NCIRfDiscoverSelect[5] = INTF_NFCDEP;
+    else if (gNextTag_Protocol == PROT_MIFARE)
+        NCIRfDiscoverSelect[5] = INTF_TAGCMD;
+    else
+        NCIRfDiscoverSelect[5] = INTF_FRAME;
+
+    (void)writeData(NCIRfDiscoverSelect, sizeof(NCIRfDiscoverSelect));
+    getMessage();
+
+    if ((rxBuffer[0] == 0x41) && (rxBuffer[1] == 0x04) && (rxBuffer[3] == 0x00))
+    {
+        getMessage(100);
+        if ((rxBuffer[0] == 0x61) || (rxBuffer[1] == 0x05))
+        {
+            pRfIntf->Interface = rxBuffer[4];
+            pRfIntf->Protocol = rxBuffer[5];
+            pRfIntf->ModeTech = rxBuffer[6];
+            FillInterfaceInfo(pRfIntf, &rxBuffer[10]);
+            status = SUCCESS;
+        }
+    }
+
+    return status;
+}
+
+bool NFCDriver::NxpNci_FactoryTest_Prbs(NxpNci_TechType_t type, NxpNci_Bitrate_t bitrate) {
+    uint8_t NCIPrbs_1stGen[] = {0x2F, 0x30, 0x04, 0x00, 0x00, 0x01, 0x01};
+    uint8_t NCIPrbs_2ndGen[] = {0x2F, 0x30, 0x06, 0x00, 0x00, 0x00, 0x00, 0x01, 0x01};
+    uint8_t *NxpNci_cmd;
+    uint16_t NxpNci_cmd_size = 0;
+
+    if (gNfcController_generation == 1)
+    {
+        NxpNci_cmd = NCIPrbs_1stGen;
+        NxpNci_cmd_size = sizeof(NCIPrbs_1stGen);
+        NxpNci_cmd[3] = type;
+        NxpNci_cmd[4] = bitrate;
+    }
+    else if (gNfcController_generation == 2)
+    {
+        NxpNci_cmd = NCIPrbs_2ndGen;
+        NxpNci_cmd_size = sizeof(NCIPrbs_2ndGen);
+        NxpNci_cmd[5] = type;
+        NxpNci_cmd[6] = bitrate;
+    }
+
+    if (NxpNci_cmd_size != 0)
+    {
+        (void)writeData(NxpNci_cmd, sizeof(NxpNci_cmd));
+        getMessage();
+        if ((rxBuffer[0] != 0x4F) || (rxBuffer[1] != 0x30) || (rxBuffer[3] != 0x00))
+            return ERROR;
+    }
+    else
+    {
+        return ERROR;
+    }
+
+    return SUCCESS;
+}
+
+bool NFCDriver::NxpNci_FactoryTest_RfOn(void) {
+    uint8_t NCIRfOn[] = {0x2F, 0x3D, 0x02, 0x20, 0x01};
+
+    writeData(NCIRfOn, sizeof(NCIRfOn));
+    getMessage();
+    if ((rxBuffer[0] != 0x4F) || (rxBuffer[1] != 0x3D) || (rxBuffer[3] != 0x00)) {
+        return ERROR;
+    }
+    return SUCCESS;
+}
+
+void NFCDriver::ProcessP2pMode(RfIntf_t RfIntf) {
+
+    uint8_t status = ERROR;
+    bool restart = false;
+    uint8_t NCILlcpSymm[] = {0x00, 0x00, 0x02, 0x00, 0x00};
+    uint8_t NCIRestartDiscovery[] = {0x21, 0x06, 0x01, 0x03};
+
+    /* Reset P2P_NDEF state */
+    P2P_NDEF_Reset();
+
+    /* Is Initiator mode ? */
+    if ((RfIntf.ModeTech & MODE_LISTEN) != MODE_LISTEN)
+    {
+        /* Initiate communication (SYMM PDU) */
+        (void)writeData(NCILlcpSymm, sizeof(NCILlcpSymm));
+        getMessage();
+
+        /* Save status for discovery restart */
+        restart = true;
+    }
+    status = ERROR;
+    getMessage(2000);
+    if (rxMessageLength > 0)
+        status = SUCCESS;
+
+    /* Get frame from remote peer */
+    while (status == SUCCESS)
+    {
+        /* is DATA_PACKET ? */
+        if ((rxBuffer[0] == 0x00) && (rxBuffer[1] == 0x00))
+        {
+            uint8_t Cmd[MAX_NCI_FRAME_SIZE];
+            uint16_t CmdSize;
+            /* Handle P2P communication */
+            P2P_NDEF_Next(&rxBuffer[3], rxBuffer[2], &Cmd[3], (unsigned short *)&CmdSize);
+            /* Compute DATA_PACKET to answer */
+            Cmd[0] = 0x00;
+            Cmd[1] = (CmdSize & 0xFF00) >> 8;
+            Cmd[2] = CmdSize & 0x00FF;
+            status = ERROR;
+            (void)writeData(Cmd, CmdSize + 3);
+            getMessage();
+            if (rxMessageLength > 0)
+                status = SUCCESS;
+        }
+            /* is CORE_INTERFACE_ERROR_NTF ?*/
+        else if ((rxBuffer[0] == 0x60) && (rxBuffer[1] == 0x08))
+        {
+            /* Come back to discovery state */
+            break;
+        }
+            /* is RF_DEACTIVATE_NTF ? */
+        else if ((rxBuffer[0] == 0x61) && (rxBuffer[1] == 0x06))
+        {
+            /* Come back to discovery state */
+            break;
+        }
+            /* is RF_DISCOVERY_NTF ? */
+        else if ((rxBuffer[0] == 0x61) && ((rxBuffer[1] == 0x05) || (rxBuffer[1] == 0x03)))
+        {
+            do
+            {
+                if ((rxBuffer[0] == 0x61) && ((rxBuffer[1] == 0x05) || (rxBuffer[1] == 0x03)))
+                {
+                    if ((rxBuffer[6] & MODE_LISTEN) != MODE_LISTEN)
+                        restart = true;
+                    else
+                        restart = false;
+                }
+                status = ERROR;
+                (void)writeData(rxBuffer, rxMessageLength);
+                getMessage();
+                if (rxMessageLength > 0)
+                    status = SUCCESS;
+            } while (rxMessageLength != 0);
+            /* Come back to discovery state */
+            break;
+        }
+
+        /* Wait for next frame from remote P2P, or notification event */
+        status = ERROR;
+        (void)writeData(rxBuffer, rxMessageLength);
+        getMessage();
+        if (rxMessageLength > 0)
+            status = SUCCESS;
+    }
+
+    /* Is Initiator mode ? */
+    if (restart)
+    {
+        /* Communication ended, restart discovery loop */
+        (void)writeData(NCIRestartDiscovery, sizeof(NCIRestartDiscovery));
+        getMessage();
+        getMessage(100);
+    }
+}
+
+void NFCDriver::PrintChar(const uint8_t *data, const long numBytes) {
+    uint32_t szPos;
+    for (szPos=0; szPos < numBytes; szPos++)
+    {
+        if (data[szPos] <= 0x1F)
+            printf(".");
+        else
+            printf("%c",(char)data[szPos]);
+    }
+    printf("\n");
+}
+
+void NFCDriver::SetNDEFFile(const uint8_t *ndef, const int16_t ndefLength) {
+    if (ndefLength > (NDEF_MAX_LENGTH - 2))
+    {
+        printf("ndef file too large (> NDEF_MAX_LENGHT -2) - aborting...\n");
+        return;
+    }
+
+    ndef_file_read[0] = ndefLength >> 8;
+    ndef_file_read[1] = ndefLength & 0xFF;
+    memcpy(ndef_file_read + 2, ndef, ndefLength);
 }
 
 uint8_t NFCDriver::_I2Caddress;
