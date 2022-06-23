@@ -25,6 +25,7 @@
 #include "gpio.h"
 #include "nfc_driver.h"
 #include "NdefMessage.h"
+#include "ble_driver.h"
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
@@ -62,8 +63,30 @@ void SystemClock_Config(void);
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
 NFCDriver nfc(0x28);
+BleDriver ble;
+
+bool begin_trans = false;
+
+void onTagWritten(uint8_t *nfc_data, uint16_t len) {
+    nfc.PrintChar(nfc_data, len);
+    NdefMessage msg = NdefMessage(nfc_data, len);
+    msg.print();
+    begin_trans = false;
+    ble.SendData(nfc_data, len);
+}
+
+void onBleReceive(uint8_t *data) {
+begin_trans = true;
+    while (begin_trans)  {
+        nfc.EmulateTag(onTagWritten, 60000);
+    }
+}
+
+
+
 /* USER CODE END 0 */
 extern void initialise_monitor_handles(void);
+
 /**
   * @brief  The application entry point.
   * @retval int
@@ -100,17 +123,15 @@ int main(void) {
     uint8_t mode = 2;
     nfc.init(mode);
 
+    ble.init( onBleReceive);
+
     /* USER CODE END 2 */
 
     /* Infinite loop */
     /* USER CODE BEGIN WHILE */
     while (1) {
         /* USER CODE END WHILE */
-        nfc.EmulateTag([](uint8_t* data, uint16_t len) {
-            nfc.PrintChar(data, len);
-            NdefMessage msg = NdefMessage(data, len);
-            msg.print();
-        }, 10000);
+
         /* USER CODE BEGIN 3 */
     }
     /* USER CODE END 3 */

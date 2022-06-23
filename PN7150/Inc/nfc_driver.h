@@ -308,7 +308,7 @@ public:
     bool CardModeReceive(unsigned char *pData, unsigned char *pDataSize);
     bool WaitForDiscoveryNotification(RfIntf_t *pRfIntf, uint8_t tout = 0);
     void FillInterfaceInfo(RfIntf_t *pRfIntf, uint8_t *pBuf);
-    void EmulateTag(void (*callback)(uint8_t *buf, uint16_t length), uint32_t timeout = 0);
+    bool EmulateTag(void (*callback)(uint8_t *buf, uint16_t length), uint32_t timeout = 0);
     bool ReaderTagCmd(unsigned char *pCommand, unsigned char CommandSize, unsigned char *pAnswer, unsigned char *pAnswerSize);
     bool StopDiscovery(void);
     void ProcessReaderMode(RfIntf_t RfIntf, RW_Operation_t Operation);

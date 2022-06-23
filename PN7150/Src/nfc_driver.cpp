@@ -865,7 +865,7 @@ void NFCDriver::FillInterfaceInfo(RfIntf_t *pRfIntf, uint8_t *pBuf) {
     }
 }
 
-void NFCDriver::EmulateTag(void (*callback)(uint8_t *, uint16_t),
+bool NFCDriver::EmulateTag(void (*callback)(uint8_t *, uint16_t),
         uint32_t timeout) {
     unsigned char tag_cmd[NDEF_MAX_LENGTH], CmdSize;
     bool tagWrittenByInitiator = false;
@@ -989,10 +989,11 @@ void NFCDriver::EmulateTag(void (*callback)(uint8_t *, uint16_t),
                 }
             }
         } else {
+            printf("breaking out...");
             break;
         }
     }
-
+    return tagWrittenByInitiator;
 }
 
 void NFCDriver::init(uint8_t modeSE) {

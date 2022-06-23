@@ -49,11 +49,15 @@ else ()
     add_compile_options(-Og -g)
 endif ()
 
-include_directories(Core/Inc Drivers/STM32F3xx_HAL_Driver/Inc Drivers/STM32F3xx_HAL_Driver/Inc/Legacy Drivers/CMSIS/Device/ST/STM32F3xx/Include Drivers/CMSIS/Include PN7150/Inc)
+include_directories(Core/Inc Drivers/STM32F3xx_HAL_Driver/Inc
+        Drivers/STM32F3xx_HAL_Driver/Inc/Legacy
+        Drivers/CMSIS/Device/ST/STM32F3xx/Include
+        Drivers/CMSIS/Include PN7150/Inc
+        HM19/Inc)
 
 add_definitions(-DDEBUG -DUSE_HAL_DRIVER -DSTM32F303xE)
 
-file(GLOB_RECURSE SOURCES "Core/*.*" "Drivers/*.*" "PN7150/*.*")
+file(GLOB_RECURSE SOURCES "Core/*.*" "Drivers/*.*" "PN7150/*.*" "HM19/*.*")
 
 set(LINKER_SCRIPT ${CMAKE_SOURCE_DIR}/STM32F303RETX_FLASH.ld)
 
