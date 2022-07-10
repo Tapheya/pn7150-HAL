@@ -105,22 +105,28 @@ void NFCDriver::setTimeOut(unsigned long theTimeOut) {
 }
 
 bool NFCDriver::isTimeOut() const {
+    //printf("Start time: %lu, curr: %lu, timeout: %lu\n", timeOutStartTime, (HAL_GetTick() - timeOutStartTime), timeOut);
     return ((HAL_GetTick() - timeOutStartTime) >= timeOut);
 }
 
 bool NFCDriver::getMessage(uint16_t timeout) {
     setTimeOut(timeout);
     rxMessageLength = 0;
-    if (isTimeOut()) {
-        printf("TIME OUT\n");
-    }
+    int tick_stuck_count = 0;
+
     while (!isTimeOut()) {
         rxMessageLength = readData(rxBuffer);
         if (rxMessageLength) {
-            //printf("Length %lu\n", rxMessageLength);
             break;
         } else if (timeout == 1337) {
             setTimeOut(timeout);
+        }
+
+        if(HAL_GetTick() == timeOutStartTime ) {
+            tick_stuck_count++;
+        }
+        if(tick_stuck_count > 0xFFFFF) {
+            HAL_IncTick();
         }
     }
 
@@ -870,7 +876,6 @@ bool NFCDriver::EmulateTag(void (*callback)(uint8_t *, uint16_t),
     unsigned char tag_cmd[NDEF_MAX_LENGTH], CmdSize;
     bool tagWrittenByInitiator = false;
 
-
     uint8_t ndefBuf[120];
     NdefMessage message = NdefMessage();
     int messageSize;
@@ -886,21 +891,18 @@ bool NFCDriver::EmulateTag(void (*callback)(uint8_t *, uint16_t),
     unsigned long start = HAL_GetTick();
     printf("Waiting for a Card Reader ...\n");
 
-    while (!((HAL_GetTick() - start) >= timeout) || timeout == 0) {
+    while ((HAL_GetTick() - start) < timeout) {
         if (!tagWrittenByInitiator) {
             if (CardModeReceive(tag_cmd, &CmdSize) == 0) { //Data in buffer?
                 if ((CmdSize >= 2) && (tag_cmd[0] == 0x00)) { //Expect at least two bytes
-                    printf("CMD Filled...\n");
                     uint8_t p1 = tag_cmd[C_APDU_P1];
                     uint8_t p2 = tag_cmd[C_APDU_P2];
                     uint8_t lc = tag_cmd[C_APDU_LC];
                     uint16_t p1p2_length = ((int16_t) p1 << 8) + p2;
                     switch (tag_cmd[C_APDU_INS]) {
                         case ISO7816_SELECT_FILE:
-                            printf("File Select...\n");
                             switch (p1) {
                                 case C_APDU_P1_SELECT_BY_ID:
-                                    printf("Select By ID...\n");
                                     if (p2 != 0x0c) {
                                         printf("C_APDU_P2 != 0x0c\n");
                                         setResponse(COMMAND_COMPLETE, tag_cmd, &sendlen, 0);
@@ -909,10 +911,8 @@ bool NFCDriver::EmulateTag(void (*callback)(uint8_t *, uint16_t),
                                         setResponse(COMMAND_COMPLETE, tag_cmd, &sendlen, 0);
                                         if (tag_cmd[C_APDU_DATA + 1] == 0x03) {
                                             currentFile = CC;
-                                            printf("File is CC..\n");
                                         } else if (tag_cmd[C_APDU_DATA + 1] == 0x04) {
                                             currentFile = NDEF;
-                                            printf("File is NDEF..\n");
                                         }
                                     } else {
                                         printf("Tag not found..\n");
@@ -920,13 +920,11 @@ bool NFCDriver::EmulateTag(void (*callback)(uint8_t *, uint16_t),
                                     }
                                     break;
                                 case C_APDU_P1_SELECT_BY_NAME:
-                                    printf("Select By Name...\n");
                                     const uint8_t ndef_tag_application_name_v2[] = {0, 0x7, 0xD2, 0x76, 0x00, 0x00,
                                                                                     0x85,
                                                                                     0x01, 0x01};
                                     if (0 == memcmp(ndef_tag_application_name_v2, tag_cmd + C_APDU_P2,
                                             sizeof(ndef_tag_application_name_v2))) {
-                                        printf("Selected by Name...\n");
                                         setResponse(COMMAND_COMPLETE, tag_cmd, &sendlen, 0);
                                     } else {
                                         printf("function not supported\n");
@@ -936,7 +934,6 @@ bool NFCDriver::EmulateTag(void (*callback)(uint8_t *, uint16_t),
                             }
                             break;
                         case ISO7816_READ_BINARY:
-                            printf("Read Binary...\n");
                             switch (currentFile) {
                                 case NONE:
                                     setResponse(TAG_NOT_FOUND, tag_cmd, &sendlen, 0);
@@ -960,7 +957,6 @@ bool NFCDriver::EmulateTag(void (*callback)(uint8_t *, uint16_t),
                             }
                             break;
                         case ISO7816_UPDATE_BINARY:
-                            printf("Update Binary...\n");
                             if (!tagWriteable) {
                                 setResponse(FUNCTION_NOT_SUPPORTED, tag_cmd, &sendlen, 0);
                             } else {
@@ -984,15 +980,16 @@ bool NFCDriver::EmulateTag(void (*callback)(uint8_t *, uint16_t),
                             setResponse(FUNCTION_NOT_SUPPORTED, tag_cmd, &sendlen, 0);
                     }
                     if (CardModeSend(tag_cmd, sendlen) == HAL_OK) {
-                        printf("Response Sent\n");
                     }
                 }
+            } else {
+                continue;
             }
         } else {
-            printf("breaking out...");
             break;
         }
     }
+
     return tagWrittenByInitiator;
 }
 

@@ -24,7 +24,7 @@ set(CMAKE_C_STANDARD 11)
 #add_link_options(-mfloat-abi=hard -mfpu=fpv4-sp-d16)
 
 #Uncomment for software floating point
-#add_compile_options(-mfloat-abi=soft)
+add_compile_options(-mfloat-abi=soft)
 
 add_compile_options(-mcpu=cortex-m4 -mthumb -mthumb-interwork)
 add_compile_options(-ffunction-sections -fdata-sections -fno-common -fmessage-length=0)
@@ -53,7 +53,8 @@ include_directories(Core/Inc Drivers/STM32F3xx_HAL_Driver/Inc
         Drivers/STM32F3xx_HAL_Driver/Inc/Legacy
         Drivers/CMSIS/Device/ST/STM32F3xx/Include
         Drivers/CMSIS/Include PN7150/Inc
-        HM19/Inc)
+        HM19/Inc
+        STM32_Cryptographic/include)
 
 add_definitions(-DDEBUG -DUSE_HAL_DRIVER -DSTM32F303xE)
 
@@ -65,7 +66,10 @@ add_link_options(-Wl,-gc-sections,--print-memory-usage,-Map=${PROJECT_BINARY_DIR
 add_link_options(-mcpu=cortex-m4 -mthumb -mthumb-interwork)
 add_link_options(-T ${LINKER_SCRIPT})
 
+
 add_executable(${PROJECT_NAME}.elf ${SOURCES} ${LINKER_SCRIPT})
+target_link_directories(${PROJECT_NAME}.elf PUBLIC STM32_Cryptographic/lib)
+target_link_libraries(${PROJECT_NAME}.elf STM32Cryptographic_CM4)
 
 set(HEX_FILE ${PROJECT_BINARY_DIR}/${PROJECT_NAME}.hex)
 set(BIN_FILE ${PROJECT_BINARY_DIR}/${PROJECT_NAME}.bin)

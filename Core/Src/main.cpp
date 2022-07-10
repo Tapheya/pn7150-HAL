@@ -18,6 +18,7 @@
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
+#include "crc.h"
 #include <stdio.h>
 #include <sys/unistd.h>
 #include "i2c.h"
@@ -26,6 +27,25 @@
 #include "nfc_driver.h"
 #include "NdefMessage.h"
 #include "ble_driver.h"
+#include "cipher.h"
+
+/* Global variables ----------------------------------------------------------*/
+/* CBC context handle */
+
+/* Private typedef -----------------------------------------------------------*/
+/* Private defines -----------------------------------------------------------*/
+#define TIMEOUT 60000
+#define MAJOR_V 0x01
+#define MINOR_V 0x00
+#define PATCH_V 0x00
+#define HW_VER 0x00
+/* Private macros ------------------------------------------------------------*/
+/* Private variables ---------------------------------------------------------*/
+const char SN[] = {'S', 'N', 0x00, 0x00, 0x00, 0x00, 0x00, 0x01};
+const uint8_t MAC[6] = {0x54, 0x41, 0x50, 0x2D, 0x5E, 0x4B};
+const char APP_VER[] = {'T','A','P','-','A','P','P','-','H','W','-','V',MAJOR_V,'.',MINOR_V, PATCH_V};
+const char BT_NAME_PRE[] = {'t','a','p','h','e','y','a'};
+const char HW[] = {'R', 'E', 'V', '_', HW_VER};
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
@@ -64,22 +84,118 @@ void SystemClock_Config(void);
 /* USER CODE BEGIN 0 */
 NFCDriver nfc(0x28);
 BleDriver ble;
+Cipher cipher;
 
 bool begin_trans = false;
+
+void sendDeviceInfo() {
+    uint16_t ex_data_len = 3;
+    uint16_t head_len = 8;
+
+    uint16_t data_len = sizeof(SN) + sizeof(MAC) + sizeof(APP_VER) + sizeof(BT_NAME_PRE) + sizeof(HW) + ex_data_len + head_len;
+    uint16_t var_len = sizeof(SN) + sizeof(MAC) + sizeof(APP_VER) + sizeof(BT_NAME_PRE) + sizeof(HW) + ex_data_len + 3;
+    uint16_t len = sizeof(SN) + sizeof(MAC) + sizeof(APP_VER) + sizeof(BT_NAME_PRE) + sizeof(HW) + ex_data_len;
+
+    uint8_t data[data_len];
+    uint8_t var[var_len];
+
+    data[0] = 0x55;
+    data[1] = var_len >> 8;
+    data[2] = var_len  & 0x00FF;
+    data[3] = 0x01;
+
+    var[0] = 0x02;
+    var[1] = len >> 8;
+    var[2] = len & 0x00FF;
+
+    memcpy(var + 3, SN, sizeof(SN));
+    memcpy(var + 3 + sizeof(SN), MAC, 6);
+    memcpy(var + 3 + sizeof(SN) + sizeof(MAC), APP_VER, sizeof(APP_VER));
+
+    uint8_t bt_name[10];
+
+    memcpy(bt_name, BT_NAME_PRE, 7);
+    memcpy(bt_name + 7, SN + 5, 3);
+
+    memcpy(var + 3 + sizeof(SN) + sizeof(MAC) + sizeof(APP_VER), bt_name, 10);
+    memcpy(var + 3 + sizeof(SN) + sizeof(MAC) + sizeof(APP_VER) + sizeof(bt_name), HW, sizeof(HW));
+
+    memcpy(data + 4 , var, var_len);
+
+    uint8_t crc = 0;
+    for(int i = 0; i < sizeof(data) - 1; i++) {
+        crc ^= data[i];
+    }
+
+    data[data_len - 1] = crc;
+
+    ble.SendData(data, sizeof(data));
+
+}
 
 void onTagWritten(uint8_t *nfc_data, uint16_t len) {
     nfc.PrintChar(nfc_data, len);
     NdefMessage msg = NdefMessage(nfc_data, len);
     msg.print();
     begin_trans = false;
-    ble.SendData(nfc_data, len);
+    uint16_t en_len =  cipher.get_new_size(len); //get new length for cipher
+    uint8_t en[en_len];
+    cipher.encrypt(nfc_data, len, en);
+    uint8_t data[en_len + 8];
+    uint16_t var_len = en_len + 3;
+    uint8_t var[var_len];
+    data[0] = 0x55;
+    data[1] = var_len >> 8;
+    data[2] = var_len  & 0x00FF;
+    data[3] = 0x01;
+
+    var[0] = 0x04;
+    var[1] = en_len >> 8;
+    var[2] = en_len & 0x00FF;
+
+    memcpy(var + 3, en, en_len);
+    memcpy(data + 4 , var, var_len);
+
+    uint8_t crc = 0;
+
+    for(int i = 0; i < sizeof(data) - 1; i++) {
+        crc ^= data[i];
+    }
+
+    data[en_len + 7] = crc;
+
+    ble.SendData(data, sizeof(data));
 }
 
 void onBleReceive(uint8_t *data) {
-begin_trans = true;
-    while (begin_trans)  {
-        nfc.EmulateTag(onTagWritten, 60000);
+    printf("Data REC %X\n", data[0]);
+    if(data[0] == 0x44) {
+        uint16_t len = 0;
+        len = (data[1] << 8) | (data[2]);
+        printf("LEN %X\n", len);
+        uint8_t var[len];
+        memcpy(var, data + 3, len);
+        printf("TAG %X\n", var[0]);
+        switch (var[0]) {
+            case 0x02: //get device info
+            sendDeviceInfo();
+                break;
+            case 0x04:
+                begin_trans = true;
+                unsigned long start = HAL_GetTick();
+                while (!((HAL_GetTick() - start) >= TIMEOUT) && begin_trans)  {
+                    nfc.EmulateTag(onTagWritten, TIMEOUT);
+                }
+                break;
+
+        }
     }
+//begin_trans = true;
+//    unsigned long start = HAL_GetTick();
+//    while (!((HAL_GetTick() - start) >= TIMEOUT) && begin_trans)  {
+//        nfc.EmulateTag(onTagWritten, TIMEOUT);
+//    }
+//    printf("Timed Out\n");
 }
 
 
@@ -93,8 +209,6 @@ extern void initialise_monitor_handles(void);
   */
 int main(void) {
     /* USER CODE BEGIN 1 */
-
-    /* USER CODE END 1 */
 
     /* MCU Configuration--------------------------------------------------------*/
 
@@ -117,8 +231,27 @@ int main(void) {
     MX_I2C1_Init();
     MX_UART5_Init();
     MX_USART2_UART_Init();
+    MX_CRC_Init();
     setvbuf(stdout, NULL, _IONBF, 0);
     /* USER CODE BEGIN 2 */
+
+    /* Initialize cryptographic library */
+    if (!cipher.init())
+    {
+        Error_Handler();
+    }
+
+//    uint8_t data[cipher.get_new_size(sizeof(To_Encrypt))];
+//
+//    cipher.encrypt(To_Encrypt, sizeof(To_Encrypt), data);
+//
+//    printf("%X\n", data[0]);
+//
+//    uint8_t plain[sizeof(data)];
+//
+//    cipher.decrypt(data, sizeof(data), plain);
+//
+//    printf("%X\n", plain[0]);
 
     uint8_t mode = 2;
     nfc.init(mode);

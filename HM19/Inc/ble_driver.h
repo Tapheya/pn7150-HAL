@@ -9,6 +9,8 @@
 #include <cstdint>
 #include "usart.h"
 
+#define MAX_RX_SIZE 16
+
 class BleDriver {
 public:
     BleDriver();

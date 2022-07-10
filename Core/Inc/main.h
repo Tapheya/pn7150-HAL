@@ -28,6 +28,11 @@ extern "C" {
 
 /* Includes ------------------------------------------------------------------*/
 #include "stm32f3xx_hal.h"
+#include "cmox_crypto.h"
+
+#define FAILED  ((TestStatus)0)
+#define PASSED  ((TestStatus)1)
+typedef uint32_t TestStatus;
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
