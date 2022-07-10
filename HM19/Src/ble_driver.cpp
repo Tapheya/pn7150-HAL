@@ -9,9 +9,9 @@ uint8_t rxBuff[MAX_RX_SIZE];
 
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 {
-    //printf("Data Received from BLE\n");
-    BleDriver::callback(rxBuff);
     HAL_UART_Receive_IT(&huart5, rxBuff, MAX_RX_SIZE);
+    printf("Data Received from BLE\n");
+    BleDriver::callback(rxBuff);
 }
 
 BleDriver::BleDriver() {

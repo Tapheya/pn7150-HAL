@@ -39,6 +39,7 @@
 #define MINOR_V 0x00
 #define PATCH_V 0x00
 #define HW_VER 0x00
+#define HEADER_LEN 0x08
 /* Private macros ------------------------------------------------------------*/
 /* Private variables ---------------------------------------------------------*/
 const char SN[] = {'S', 'N', 0x00, 0x00, 0x00, 0x00, 0x00, 0x01};
@@ -46,6 +47,11 @@ const uint8_t MAC[6] = {0x54, 0x41, 0x50, 0x2D, 0x5E, 0x4B};
 const char APP_VER[] = {'T','A','P','-','A','P','P','-','H','W','-','V',MAJOR_V,'.',MINOR_V, PATCH_V};
 const char BT_NAME_PRE[] = {'t','a','p','h','e','y','a'};
 const char HW[] = {'R', 'E', 'V', '_', HW_VER};
+
+uint8_t bat_percent = 95;
+uint16_t bat_voltage = 4800; //milli volts mV
+uint16_t bat_capacity = 480; //mAh
+uint8_t bat_charging = 0x01;
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
@@ -88,13 +94,47 @@ Cipher cipher;
 
 bool begin_trans = false;
 
+void sendBatteryInfo() {
+    uint16_t len = sizeof(bat_percent) + sizeof(bat_capacity) + sizeof(bat_voltage) + sizeof(bat_charging);
+    uint16_t data_len = len + HEADER_LEN;
+    uint16_t var_len = len + 3; // 3 bytes for tag(1byte) and length(2bytes)
+
+    uint8_t data[data_len];
+    uint8_t var[var_len];
+
+    data[0] = 0x55;
+    data[1] = var_len >> 8;
+    data[2] = var_len  & 0x00FF;
+    data[3] = 0x01;
+
+    var[0] = 0x03;
+    var[1] = len >> 8;
+    var[2] = len & 0x00FF;
+
+    memcpy(var + 3, &bat_percent, sizeof(bat_percent));
+    memcpy(var + 3 + sizeof(bat_percent), &bat_capacity, sizeof(bat_capacity));
+    memcpy(var + 3 + sizeof(bat_percent) + sizeof(bat_capacity), &bat_voltage, sizeof(bat_voltage));
+    memcpy(var + 3 + sizeof(bat_percent) + sizeof(bat_capacity) + sizeof(bat_voltage), &bat_charging, sizeof(bat_charging));
+
+    memcpy(data + 4 , var, var_len);
+
+    uint8_t crc = 0;
+    for(int i = 0; i < sizeof(data) - 1; i++) {
+        crc ^= data[i];
+    }
+
+    data[data_len - 1] = crc;
+
+    ble.SendData(data, sizeof(data));
+
+}
+
 void sendDeviceInfo() {
     uint16_t ex_data_len = 3;
-    uint16_t head_len = 8;
 
-    uint16_t data_len = sizeof(SN) + sizeof(MAC) + sizeof(APP_VER) + sizeof(BT_NAME_PRE) + sizeof(HW) + ex_data_len + head_len;
-    uint16_t var_len = sizeof(SN) + sizeof(MAC) + sizeof(APP_VER) + sizeof(BT_NAME_PRE) + sizeof(HW) + ex_data_len + 3;
     uint16_t len = sizeof(SN) + sizeof(MAC) + sizeof(APP_VER) + sizeof(BT_NAME_PRE) + sizeof(HW) + ex_data_len;
+    uint16_t data_len = len + HEADER_LEN;
+    uint16_t var_len = len + 3; // 3 bytes for tag(1byte) and length(2bytes)
 
     uint8_t data[data_len];
     uint8_t var[var_len];
@@ -141,7 +181,7 @@ void onTagWritten(uint8_t *nfc_data, uint16_t len) {
     uint16_t en_len =  cipher.get_new_size(len); //get new length for cipher
     uint8_t en[en_len];
     cipher.encrypt(nfc_data, len, en);
-    uint8_t data[en_len + 8];
+    uint8_t data[en_len + HEADER_LEN];
     uint16_t var_len = en_len + 3;
     uint8_t var[var_len];
     data[0] = 0x55;
@@ -180,6 +220,13 @@ void onBleReceive(uint8_t *data) {
             case 0x02: //get device info
             sendDeviceInfo();
                 break;
+            case 0x03:
+                sendBatteryInfo();
+                break;
+            case 0x05:
+                begin_trans = false;
+                printf("Transaction Cancelled..\n");
+                break;
             case 0x04:
                 begin_trans = true;
                 unsigned long start = HAL_GetTick();
@@ -187,18 +234,9 @@ void onBleReceive(uint8_t *data) {
                     nfc.EmulateTag(onTagWritten, TIMEOUT);
                 }
                 break;
-
         }
     }
-//begin_trans = true;
-//    unsigned long start = HAL_GetTick();
-//    while (!((HAL_GetTick() - start) >= TIMEOUT) && begin_trans)  {
-//        nfc.EmulateTag(onTagWritten, TIMEOUT);
-//    }
-//    printf("Timed Out\n");
 }
-
-
 
 /* USER CODE END 0 */
 extern void initialise_monitor_handles(void);

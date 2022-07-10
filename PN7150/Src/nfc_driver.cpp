@@ -876,23 +876,24 @@ bool NFCDriver::EmulateTag(void (*callback)(uint8_t *, uint16_t),
     unsigned char tag_cmd[NDEF_MAX_LENGTH], CmdSize;
     bool tagWrittenByInitiator = false;
 
-    uint8_t ndefBuf[120];
-    NdefMessage message = NdefMessage();
-    int messageSize;
-    message.addUriRecord("http://www.tapheya.com");
-    messageSize = message.getEncodedSize();
+    //uint8_t ndefBuf[120];
+    //NdefMessage message = NdefMessage();
+    //int messageSize;
+    //message.addUriRecord("http://www.tapheya.com");
+    //messageSize = message.getEncodedSize();
 
 
-    message.encode(ndefBuf);
+    //message.encode(ndefBuf);
 
     // comment out this command for no ndef message
-    SetNDEFFile(ndefBuf, messageSize);
+    //SetNDEFFile(ndefBuf, messageSize);
     StartDiscovery(2);
     unsigned long start = HAL_GetTick();
     printf("Waiting for a Card Reader ...\n");
 
     while ((HAL_GetTick() - start) < timeout) {
         if (!tagWrittenByInitiator) {
+            //printf("Waiting for a Card Reader ...\n");
             if (CardModeReceive(tag_cmd, &CmdSize) == 0) { //Data in buffer?
                 if ((CmdSize >= 2) && (tag_cmd[0] == 0x00)) { //Expect at least two bytes
                     uint8_t p1 = tag_cmd[C_APDU_P1];
